@@ -6,6 +6,7 @@
 #include <vector>
 #include <map>
 #include <assert.h>
+#include <chrono>
 
 #define SVG_RECT_WIDTH 175
 #define SVG_RECT_HEIGHT 50
@@ -28,7 +29,7 @@ struct NODE
 	NODE * parent;
 	std::vector<NODE*> children;
 	unsigned int position;
-	double probability;
+	unsigned long long inverseProbability; // can avoid floating point errors until final conversion
 	unsigned int depth;
 };
 
@@ -48,7 +49,8 @@ void ProcessNode(NODE * node, std::vector<NODE*> & baseList, std::vector<NODE*> 
 		NODE * child = new NODE();
 		child->parent = node;
 		child->position = node->position + i + 1; // must move at least one
-		child->probability = node->probability * (1 / static_cast<double>(remainingDist));
+		child->inverseProbability = node->inverseProbability * remainingDist;
+		assert(child->inverseProbability >= node->inverseProbability); // Check for large values of N resulting in overflow
 		child->depth = node->depth + 1;
 		node->children.push_back(child);
 		if (depthMap.count(child->depth) == 0)
@@ -78,7 +80,7 @@ unsigned int DrawSVG(FILE * svgFile, NODE * node, unsigned int y, unsigned int d
 	unsigned int x = (SVG_LAYER_SPACING * node->depth) + (SVG_X_OFFET * (1 + node->depth));
 	fprintf(svgFile, "<g>\n");
 	fprintf(svgFile, "<rect width=\"%u\" height = \"%u\" x = \"%u\" y = \"%u\" fill=\"%s\"/>\n", SVG_RECT_WIDTH, SVG_RECT_HEIGHT, x, y, nodeCol);
-	fprintf(svgFile, "<text x=\"%u\" y=\"%u\" font-family=\"Verdana\" font-size=\"%u\" fill=\"black\">Pos: %u, Prob: %.3e</text>", x + TEXT_OFFSET, y + (SVG_RECT_HEIGHT / 2), FONT_SIZE, node->position, node->probability);
+	fprintf(svgFile, "<text x=\"%u\" y=\"%u\" font-family=\"Verdana\" font-size=\"%u\" fill=\"black\">Pos: %u, Prob: %.3e</text>", x + TEXT_OFFSET, y + (SVG_RECT_HEIGHT / 2), FONT_SIZE, node->position, 1 / static_cast<double>(node->inverseProbability));
 	fprintf(svgFile, "</g>\n");
 	unsigned int totalHeight = node->children.empty() ? SVG_Y_SPACING : 0;
 	unsigned int childY = y;
@@ -102,6 +104,7 @@ unsigned int DrawSVG(FILE * svgFile, NODE * node, unsigned int y, unsigned int d
 
 int main(int argc, char * argv[])
 {
+	auto trueStart = std::chrono::high_resolution_clock::now();
 	if (argc != 3)
 	{
 		printf("Please use as frogstuff.exe MIN_DEPTH MAX_DEPTH\n");
@@ -114,10 +117,10 @@ int main(int argc, char * argv[])
 		printf("Max (%u) < min (%u)\n", max, min);
 		return -1;
 	}
-	std::vector<std::map<unsigned int, LAYER>> depthMaps;
-	depthMaps.reserve(max - min);
+	unsigned long long totalTime = 0;
 	for (unsigned int i = min; i <= max; i++)
 	{
+		auto start = std::chrono::high_resolution_clock::now();
 		NODE * baseNode = new NODE{ NULL, {}, 0, 1, 0 };
 		std::vector<NODE*> toProcess = { baseNode };
 		std::vector<NODE*> toProcessCpy;
@@ -132,27 +135,33 @@ int main(int argc, char * argv[])
 				ProcessNode(node, baseList, toProcess, i, depthMap);
 			}
 		}
+		double total = 0;
+		double weightedSum = 0;
+		for (auto & node : baseList)
+		{
+			total += 1 / static_cast<double>(node->inverseProbability);
+			weightedSum += static_cast<double>(node->depth) / static_cast<double>(node->inverseProbability);
+		}
+		auto end = std::chrono::high_resolution_clock::now();
+		unsigned long long count = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+		totalTime += count;
+		printf("Time: %lluus\n", count);
+		printf("Size: %u\nTotal probability: %lf\nWeighted sum: %lf\n", i, total, weightedSum);
+		for (auto & pair : depthMap)
+		{
+			printf("Depth: %u, Node Count: %u, Terminating Count: %u\n", pair.first, pair.second.nodeCount, pair.second.terminatingCount);
+		}
+		printf("\n\n");
 		FILE * svgFile = NULL;
 		static char buf[256];
 		sprintf_s(buf, 256, "%u_distance_tree.svg", i);
 		fopen_s(&svgFile, buf, "w");
 		DrawSVG(svgFile, baseNode, SVG_Y_OFFSET, i + 1, static_cast<unsigned int>(baseList.size()));
 		fclose(svgFile);
-		double total = 0;
-		double weightedSum = 0;
-		for (auto & node : baseList)
-		{
-			total 
-				+= node->probability;
-			weightedSum += static_cast<double>(node->depth) * node->probability;
-		}
-		printf("Size: %u\nTotal probability: %lf\nWeighted sum: %lf\n", i, total, weightedSum);
 		delete baseNode;
-		depthMaps.push_back(depthMap);
-		for (auto & pair : depthMap)
-		{
-			printf("Depth: %u, Node Count: %u, Terminating Count: %u\n", pair.first, pair.second.nodeCount, pair.second.terminatingCount);
-		}
-		printf("\n\n");
 	}
+	printf("Total time (excluding I/O): %lluus\n", totalTime);
+	auto trueEnd = std::chrono::high_resolution_clock::now();
+	unsigned long long count = std::chrono::duration_cast<std::chrono::microseconds>(trueEnd - trueStart).count();
+	printf("Total time (including I/O): %lluus\n", count);
 }
