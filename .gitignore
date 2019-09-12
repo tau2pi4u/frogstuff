@@ -1,0 +1,10 @@
+.vs/*
+Debug/*
+*.svg
+frogStuff/Debug/*
+frogStuff/Release/*
+*.exe
+*.iobj
+*.ipdb
+*.pdb
+*.user
